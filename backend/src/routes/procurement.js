@@ -26,7 +26,8 @@ async function audit(actorUser, entityType, entityId, action, beforeData, afterD
   });
 }
 
-router.use(requireAuth, requireRole('admin', 'procurement_officer'));
+router.use(requireAuth, requireRole('admin', 'procurement_officer', 'manager'));
+
 
 router.get('/rfqs', async (_req, res, next) => {
   try {

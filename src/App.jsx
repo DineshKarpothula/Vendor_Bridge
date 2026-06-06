@@ -1,13 +1,18 @@
 import { useEffect, useState } from 'react';
+import LandingPage from './LandingPage';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
 
 function toBackendRole(role) {
-  return role === 'officer' ? 'procurement_officer' : role;
+  if (role === 'officer') return 'procurement_officer';
+  if (role === 'manager') return 'manager';
+  return role;
 }
 
 function toUiRole(role) {
-  return role === 'procurement_officer' ? 'officer' : role;
+  if (role === 'procurement_officer') return 'officer';
+  if (role === 'manager') return 'manager';
+  return role;
 }
 
 async function apiRequest(path, { method = 'GET', token, body } = {}) {
@@ -34,7 +39,7 @@ export default function App() {
   const [authToken, setAuthToken] = useState(() => localStorage.getItem('vendorbridge_token') || '');
   const [isBootstrapping, setIsBootstrapping] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [authScreen, setAuthScreen] = useState('login'); // login, signup, forgot, reset
+  const [authScreen, setAuthScreen] = useState('landing'); // landing, login, signup, forgot, reset
   const [role, setRole] = useState('officer'); // admin, officer, vendor
   const [showPassword, setShowPassword] = useState(false);
   const [selectedApprovalId, setSelectedApprovalId] = useState('');
@@ -64,6 +69,7 @@ export default function App() {
   const [newVendorForm, setNewVendorForm] = useState({ name: '', category: '', gst: '', contact: '', status: 'Active' });
   const [newRfq, setNewRfq] = useState({ title: '', category: '', deadline: '', description: '', item: '', qty: '', price: '' });
   const [vendorQuery, setVendorQuery] = useState('');
+  const [bidForm, setBidForm] = useState({ rfqId: '', amount: '', leadTime: '' });
 
   // Primary Layout Navigation View Controller Toggle
   const [currentView, setCurrentView] = useState('dashboard');
@@ -158,6 +164,17 @@ export default function App() {
       void approvalsResponse;
       void purchaseOrdersResponse;
       void invoicesResponse;
+      return null;
+    }
+
+    if (activeRole === 'manager') {
+      const [rfqsResponse, approvalsResponse] = await Promise.all([
+        apiRequest('/procurement/rfqs', { token }),
+        apiRequest('/procurement/approvals', { token })
+      ]);
+
+      setRfqs((rfqsResponse.rfqs ?? []).map(mapRfq));
+      setLogs(prev => prev.length > 0 ? prev : [{ text: 'Manager dashboard operational.', time: 'Just now', type: 'System' }]);
       return null;
     }
 
@@ -465,32 +482,44 @@ export default function App() {
     setAuthToken('');
     setIsAuthenticated(false);
     setSelectedApprovalId('');
-    setAuthScreen('login');
+    setAuthScreen('landing');
     setCurrentView('dashboard');
     setUserProfile({ firstName: '', lastName: '', email: '' });
   };
 
-  const handleStartApprovalWorkflow = async () => {
-    const activeRfq = rfqs[0];
-
-    if (!activeRfq) {
-      setAuthError('Create an RFQ first.');
-      return;
-    }
-
+  const handleStartApprovalWorkflow = async (rfqId, quotationId) => {
     try {
       const response = await apiRequest('/procurement/approvals', {
         method: 'POST',
         token: authToken,
         body: {
-          rfqId: activeRfq.raw?._id || activeRfq.id,
-          quotationId: quotations[0]?.raw?._id || quotations[0]?._id || null,
-          remarks: 'Initiated from frontend approval workflow.'
+          rfqId: rfqId,
+          quotationId: quotationId,
+          remarks: 'Automated evaluation selection.'
         }
       });
 
       setSelectedApprovalId(response.approval._id);
       setCurrentView('approvals');
+      await hydrateWorkspace(authToken, role);
+    } catch (error) {
+      setAuthError(error.message);
+    }
+  };
+
+  const handleBidSubmit = async (rfqId, amount, leadTime) => {
+    try {
+      await apiRequest('/vendor/quotations', {
+        method: 'POST',
+        token: authToken,
+        body: {
+          rfqId: rfqId,
+          totalAmount: Number(amount),
+          deliveryDays: Number(leadTime)
+        }
+      });
+      alert('Bid submitted successfully!');
+      setCurrentView('rfqs');
       await hydrateWorkspace(authToken, role);
     } catch (error) {
       setAuthError(error.message);
@@ -559,16 +588,19 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 flex flex-col text-gray-800 antialiased selection:bg-emerald-200">
       
       {!isAuthenticated ? (
-        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-300 rounded-2xl p-8 max-w-md w-full shadow-xl space-y-6">
-            
-            {/* CENTRAL HIGH VISIBILITY ERRORS BANNER */}
-            {authError && (
-              <div className="bg-rose-50 border border-rose-200 text-rose-900 p-3.5 rounded-xl text-xs font-bold flex items-start space-x-2.5 shadow-sm">
-                <span className="text-base leading-none">⚠️</span>
-                <span className="leading-normal">{authError}</span>
-              </div>
-            )}
+        authScreen === 'landing' ? (
+          <LandingPage onGetStarted={() => setAuthScreen('login')} />
+        ) : (
+          <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
+            <div className="bg-white border border-slate-300 rounded-2xl p-8 max-w-md w-full shadow-xl space-y-6">
+              
+              {/* CENTRAL HIGH VISIBILITY ERRORS BANNER */}
+              {authError && (
+                <div className="bg-rose-50 border border-rose-200 text-rose-900 p-3.5 rounded-xl text-xs font-bold flex items-start space-x-2.5 shadow-sm">
+                  <span className="text-base leading-none">⚠️</span>
+                  <span className="leading-normal">{authError}</span>
+                </div>
+              )}
 
             {/* SCREEN 1: LOGIN */}
             {authScreen === 'login' && (
@@ -585,6 +617,7 @@ export default function App() {
                       <option value="officer">Procurement Officer</option>
                       <option value="admin">Admin</option>
                       <option value="vendor">Vendor</option>
+                      <option value="manager">Manager / Approver</option>
                     </select>
                   </div>
                   <div>
@@ -600,7 +633,7 @@ export default function App() {
                     <button type="button" onClick={() => generateStrongPassword('login')} className="text-emerald-700 font-bold hover:underline">Suggest strong password</button>
                     <button type="button" onClick={() => { setAuthError(''); setAuthScreen('forgot'); }} className="font-bold text-slate-500 hover:underline">Forgot Password?</button>
                   </div>
-                  <button type="submit" className="w-full bg-emerald-600 text-white font-extrabold p-3 rounded-xl text-sm shadow-md tracking-wider transition-all hover:bg-emerald-700">Login Button</button>
+                  <button type="submit" className="w-full bg-emerald-600 text-white font-extrabold p-3 rounded-xl text-sm shadow-md tracking-wider transition-all hover:bg-emerald-700">Login</button>
                 </form>
                 <div className="border-t border-slate-100 pt-4 text-center text-xs text-slate-400">
                   New system user? <button onClick={() => { setAuthError(''); setAuthScreen('signup'); }} className="text-emerald-600 font-extrabold hover:underline">Sign Up Account</button>
@@ -651,6 +684,7 @@ export default function App() {
                       <option value="officer">Procurement Officer</option>
                       <option value="admin">Admin</option>
                       <option value="vendor">Vendor</option>
+                      <option value="manager">Manager / Approver</option>
                     </select>
                   </div>
                   <div className="md:col-span-2">
@@ -680,6 +714,7 @@ export default function App() {
                       <option value="officer">Procurement Officer</option>
                       <option value="admin">Admin</option>
                       <option value="vendor">Vendor</option>
+                      <option value="manager">Manager / Approver</option>
                     </select>
                   </div>
                   <div>
@@ -718,284 +753,655 @@ export default function App() {
 
           </div>
         </div>
-      ) : (
-        /* INNER APP SECURE BOUNDS WORKFLOW ENGINE (ROLE IS PERMANENTLY LOCKED TO SESSION HOOKS) */
-        <div className="min-h-screen flex flex-col bg-gray-50">
-          <header className="bg-emerald-50 border-b border-gray-200 px-6 py-4 flex justify-between items-center shadow-sm print:hidden">
-            <span className="text-2xl font-black tracking-tight text-emerald-800">VendorBridge</span>
-            <div className="flex items-center space-x-6">
-              <div className="text-right text-xs">
-                <p className="font-bold text-gray-900">{userProfile.firstName || 'User'} {userProfile.lastName || ''}</p>
-                <p className="text-gray-400 font-mono tracking-tight">{userProfile.email}</p>
-                <p className="text-emerald-800 uppercase text-[9px] font-black bg-emerald-100 px-2.5 py-0.5 rounded-md mt-0.5 inline-block tracking-wider">Session Key context Context: {role}</p>
+      )) : userProfile ? (
+        <div className="flex h-screen bg-slate-50 overflow-hidden">
+          {/* ── SIDEBAR ── */}
+          <aside className="w-64 bg-white border-r border-slate-100 flex flex-col shadow-sm print:hidden flex-shrink-0">
+            {/* Logo */}
+            <div className="px-6 py-6 border-b border-slate-50">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 bg-emerald-600 rounded-xl flex items-center justify-center shadow-lg shadow-emerald-200">
+                  <span className="text-white font-black text-base">V</span>
+                </div>
+                <div>
+                  <p className="text-sm font-black text-slate-900 tracking-tight">VendorBridge</p>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Enterprise ERP</p>
+                </div>
               </div>
-              <button onClick={handleLogout} className="text-xs font-bold border border-gray-300 rounded-xl px-3 py-1.5 bg-white shadow-sm hover:bg-gray-50 transition-colors">Sign Out</button>
             </div>
-          </header>
 
-          <div className="flex flex-1">
-            <aside className="w-64 bg-white border-r border-gray-200 p-4 space-y-1 print:hidden">
-              <nav className="space-y-1">
-                <button onClick={() => setCurrentView('dashboard')} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${currentView === 'dashboard' ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-gray-50'}`}>- Dashboard</button>
-                {(role === 'officer' || role === 'admin') && (
-                  <>
-                    <button onClick={() => setCurrentView('vendors')} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${currentView === 'vendors' ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-gray-50'}`}>- Vendors</button>
-                    <button onClick={() => setCurrentView('rfqs')} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${currentView === 'rfqs' ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-gray-50'}`}>- RFQ's</button>
-                    <button onClick={() => setCurrentView('quotations')} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${currentView === 'quotations' ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-gray-50'}`}>- Quotations</button>
-                    <button onClick={() => setCurrentView('approvals')} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${currentView === 'approvals' ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-gray-50'}`}>- Approvals</button>
-                  </>
-                )}
-                {role === 'vendor' && (
-                  <button onClick={() => setCurrentView('vendor-request')} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${currentView === 'vendor-request' ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-gray-50'}`}>- Request to Officer</button>
-                )}
-                <button onClick={() => setCurrentView('invoices')} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${currentView === 'invoices' ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-gray-50'}`}>- Purchase orders</button>
-                <button onClick={() => setCurrentView('reports')} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${currentView === 'reports' ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-gray-50'}`}>- Reports</button>
-                <button onClick={() => setCurrentView('activity')} className={`w-full text-left px-4 py-2.5 rounded-xl text-sm font-semibold transition-colors ${currentView === 'activity' ? 'bg-emerald-100 text-emerald-900' : 'text-gray-600 hover:bg-gray-50'}`}>- Activity</button>
-              </nav>
-            </aside>
+            {/* Nav */}
+            <nav className="flex-1 px-4 py-5 space-y-1 overflow-y-auto">
+              {[
+                { label: 'Dashboard', view: 'dashboard', icon: '⚡', roles: ['admin','officer','manager','vendor'] },
+                { label: 'Vendor Registry', view: 'vendors', icon: '🏢', roles: ['admin'] },
+                { label: 'Procurement RFQs', view: 'rfqs', icon: '📋', roles: ['admin','officer','vendor'] },
+                { label: 'Bid Evaluation', view: 'quotations', icon: '⚖️', roles: ['admin','officer'] },
+                { label: 'Approvals Queue', view: 'approvals', icon: '✅', roles: ['admin','manager'] },
+                { label: 'Purchase Orders', view: 'invoices', icon: '📄', roles: ['admin','officer','manager','vendor'] },
+                { label: 'Analytics', view: 'reports', icon: '📊', roles: ['admin','manager'] },
+                { label: 'Audit Trail', view: 'activity', icon: '🔍', roles: ['admin'] },
+                { label: 'My Requests', view: 'vendor-request', icon: '💬', roles: ['vendor'] },
+              ].filter(n => n.roles.includes(role)).map((nav) => (
+                <button
+                  key={nav.view}
+                  onClick={() => setCurrentView(nav.view)}
+                  className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-sm font-semibold text-left transition-all duration-150 ${
+                    currentView === nav.view
+                      ? 'bg-emerald-50 text-emerald-700 shadow-sm'
+                      : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                  }`}
+                >
+                  <span className="text-base">{nav.icon}</span>
+                  <span>{nav.label}</span>
+                </button>
+              ))}
+            </nav>
 
-            <main className="flex-1 p-8 overflow-y-auto print:p-0">
+            {/* User footer */}
+            <div className="px-4 py-5 border-t border-slate-50">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-8 h-8 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 text-xs font-black">
+                  {userProfile.firstName?.charAt(0) || '?'}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-black text-slate-800 truncate">{userProfile.firstName} {userProfile.lastName}</p>
+                  <p className="text-[10px] text-slate-400 font-semibold capitalize">{role}</p>
+                </div>
+              </div>
+              <button
+                onClick={handleLogout}
+                className="w-full text-[10px] font-black uppercase tracking-widest text-slate-400 hover:text-red-500 border border-slate-100 rounded-xl py-2.5 transition-all hover:bg-red-50"
+              >
+                Sign Out
+              </button>
+            </div>
+          </aside>
+
+          {/* ── MAIN CONTENT ── */}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Topbar */}
+            <header className="h-16 bg-white border-b border-slate-100 px-8 flex items-center justify-between shadow-sm print:hidden flex-shrink-0">
+              <div>
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-300">Portal</span>
+                <span className="text-[10px] font-black uppercase tracking-widest text-slate-400"> › {currentView.replace('-',' ')}</span>
+              </div>
+              <div className="flex items-center gap-4">
+                <div className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></div>
+                <span className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Live</span>
+              </div>
+            </header>
+
+            {/* Scrollable content */}
+            <main className="flex-1 overflow-y-auto p-8 space-y-8">
+
+              {/* ─── DASHBOARD ─── */}
               {currentView === 'dashboard' && (
+                <div className="space-y-8">
+                  <div>
+                    <h1 className="text-2xl font-black text-slate-900 tracking-tight">
+                      {role === 'admin' && 'Admin Command Center'}
+                      {role === 'officer' && 'Procurement Dashboard'}
+                      {role === 'manager' && 'Manager Approval Hub'}
+                      {role === 'vendor' && 'Vendor Portal'}
+                    </h1>
+                    <p className="text-xs text-slate-400 font-semibold mt-1">Welcome back, {userProfile.firstName}</p>
+                  </div>
+
+                  <div className="grid grid-cols-2 lg:grid-cols-4 gap-5">
+                    {(role === 'vendor' ? [
+                      { label: 'Open Opportunities', value: rfqs.length },
+                      { label: 'My Submissions', value: quotations.length },
+                      { label: 'Est. Revenue', value: `₹${activeSubtotal.toLocaleString()}` },
+                      { label: 'Win Rate', value: '42%' },
+                    ] : [
+                      { label: 'Active RFQs', value: rfqs.length },
+                      { label: 'Awaiting Approval', value: quotations.length },
+                      { label: 'Total Spend', value: `₹${completeGrandTotal.toLocaleString()}` },
+                      { label: 'System Health', value: '99.9%' },
+                    ]).map((card, i) => (
+                      <div key={i} className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm hover:shadow-md transition-shadow">
+                        <p className="text-2xl font-black text-slate-900">{card.value}</p>
+                        <p className="text-[11px] text-slate-400 font-bold uppercase tracking-wider mt-2">{card.label}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
+                      <div className="flex justify-between items-center mb-5">
+                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-400">Recent Activity</h3>
+                        <button onClick={() => setCurrentView('rfqs')} className="text-[10px] font-black text-emerald-600 uppercase tracking-widest hover:underline">View All</button>
+                      </div>
+                      {rfqs.length === 0 ? (
+                        <div className="py-12 text-center text-sm text-slate-400 font-semibold">No active records found</div>
+                      ) : (
+                        <div className="space-y-3">
+                          {rfqs.slice(0,5).map((r, i) => (
+                            <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl hover:bg-white hover:shadow-sm transition-all">
+                              <div className="flex items-center gap-3">
+                                <div className="w-8 h-8 bg-emerald-100 rounded-lg flex items-center justify-center font-black text-emerald-700 text-xs">{r.title.charAt(0)}</div>
+                                <div>
+                                  <p className="text-sm font-bold text-slate-800">{r.title}</p>
+                                  <p className="text-[10px] text-slate-400 font-mono">{r.category || 'General'}</p>
+                                </div>
+                              </div>
+                              <div className="text-right">
+                                <p className="text-sm font-black text-slate-900">₹{(r.qty * r.price).toLocaleString()}</p>
+                                <span className="text-[9px] font-bold bg-amber-50 text-amber-700 px-2 py-0.5 rounded-full uppercase">{r.status}</span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="bg-slate-900 rounded-2xl p-6 text-white shadow-xl">
+                      <h3 className="text-[10px] font-black uppercase tracking-widest text-emerald-400 mb-5">Quick Actions</h3>
+                      <div className="space-y-2.5">
+                        {[
+                          { label: 'New RFQ', view: 'rfqs', icon: '📋', roles: ['admin','officer'] },
+                          { label: 'Evaluate Bids', view: 'quotations', icon: '⚖️', roles: ['admin','officer'] },
+                          { label: 'Approve / Reject', view: 'approvals', icon: '✅', roles: ['admin','manager'] },
+                          { label: 'Submit a Bid', view: 'rfqs', icon: '🤝', roles: ['vendor'] },
+                          { label: 'View PO / Invoice', view: 'invoices', icon: '📄', roles: ['admin','officer','manager','vendor'] },
+                        ].filter(a => a.roles.includes(role)).map((action, i) => (
+                          <button
+                            key={i}
+                            onClick={() => setCurrentView(action.view)}
+                            className="w-full flex items-center justify-between p-3 bg-white/5 rounded-xl border border-white/10 text-left hover:bg-emerald-600 transition-all group"
+                          >
+                            <span className="text-xs font-bold">{action.label}</span>
+                            <span className="text-base group-hover:scale-125 transition-transform">{action.icon}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ─── VENDORS (Admin only) ─── */}
+              {currentView === 'vendors' && role === 'admin' && (
                 <div className="space-y-6">
                   <div>
-                    <h1 className="text-2xl font-black text-gray-900 tracking-tight">Dashboard</h1>
-                    <p className="text-xs text-gray-400">Welcome back — Realtime Activity Tracker</p>
-                  </div>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-5">
-                    <div className="bg-white p-5 rounded-2xl border shadow-sm"><p className="text-2xl font-black text-gray-900">{rfqs.length}</p><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mt-1">Active RFQ's</p></div>
-                    <div className="bg-white p-5 rounded-2xl border shadow-sm"><p className="text-2xl font-black text-amber-600">{rfqs.length > 0 ? 1 : 0}</p><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mt-1">Pending Approvals</p></div>
-                    <div className="bg-white p-5 rounded-2xl border shadow-sm"><p className="text-2xl font-black text-emerald-800">₹ {completeGrandTotal.toLocaleString()}</p><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mt-1">PO Allocation Value</p></div>
-                    <div className="bg-white p-5 rounded-2xl border shadow-sm"><p className="text-2xl font-black text-gray-300">0</p><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mt-1">Overdue Invoices</p></div>
+                    <h1 className="text-2xl font-black text-slate-900">Vendor Registry</h1>
+                    <p className="text-xs text-slate-400 font-semibold mt-1">Onboard and manage supplier profiles</p>
                   </div>
 
-                  <div className="bg-white border rounded-2xl p-5 shadow-sm">
-                    <h3 className="text-xs font-extrabold uppercase tracking-widest text-gray-400 mb-4">Live Active Pipeline Records</h3>
+                  <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm max-w-2xl">
+                    <h3 className="text-sm font-black text-slate-800 mb-4">Register New Vendor</h3>
+                    <form onSubmit={handleAddVendor} className="grid grid-cols-2 gap-4 text-xs">
+                      <div className="col-span-2">
+                        <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Legal Company Name *</label>
+                        <input required type="text" placeholder="e.g. Global Logistics Ltd" value={newVendorForm.name} onChange={e => setNewVendorForm({...newVendorForm, name: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-medium" />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Category *</label>
+                        <input required type="text" placeholder="IT / Logistics / Supply" value={newVendorForm.category} onChange={e => setNewVendorForm({...newVendorForm, category: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">GST Number *</label>
+                        <input required type="text" placeholder="22AAAAA0000A1Z5" value={newVendorForm.gst} onChange={e => setNewVendorForm({...newVendorForm, gst: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono" />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Contact Person</label>
+                        <input type="text" placeholder="Contact Name / Email" value={newVendorForm.contact} onChange={e => setNewVendorForm({...newVendorForm, contact: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Status</label>
+                        <select value={newVendorForm.status} onChange={e => setNewVendorForm({...newVendorForm, status: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
+                          <option>Active</option>
+                          <option>Pending</option>
+                        </select>
+                      </div>
+                      <div className="col-span-2">
+                        <button type="submit" className="bg-emerald-600 text-white font-bold px-6 py-3 rounded-xl shadow-sm hover:bg-emerald-700 transition-all">Register Vendor</button>
+                      </div>
+                    </form>
+                  </div>
+
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                    <div className="px-6 py-4 border-b border-slate-50">
+                      <h3 className="text-sm font-black text-slate-800">All Vendors ({vendors.length})</h3>
+                    </div>
+                    <table className="w-full text-xs">
+                      <thead className="bg-slate-50 text-slate-400 font-bold uppercase tracking-wider">
+                        <tr>
+                          <th className="text-left px-6 py-3">Company</th>
+                          <th className="text-left px-6 py-3">Category</th>
+                          <th className="text-left px-6 py-3">GST No.</th>
+                          <th className="text-left px-6 py-3">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-50">
+                        {vendors.length === 0 ? (
+                          <tr><td colSpan="4" className="px-6 py-10 text-center text-slate-400 font-semibold">No vendors registered yet</td></tr>
+                        ) : vendors.map(v => (
+                          <tr key={v.id} className="hover:bg-slate-50/50 transition-colors">
+                            <td className="px-6 py-4 font-bold text-slate-800">{v.name}</td>
+                            <td className="px-6 py-4 text-slate-500">{v.category}</td>
+                            <td className="px-6 py-4 font-mono text-slate-400">{v.gst}</td>
+                            <td className="px-6 py-4">
+                              <span className={`px-2.5 py-1 rounded-full text-[10px] font-bold uppercase ${v.status === 'Active' ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>{v.status}</span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ─── RFQs ─── */}
+              {currentView === 'rfqs' && (
+                <div className="space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-black text-slate-900">
+                      {role === 'vendor' ? 'Bidding Opportunities' : 'Procurement Pipeline'}
+                    </h1>
+                    <p className="text-xs text-slate-400 font-semibold mt-1">
+                      {role === 'vendor' ? 'Browse and submit bids on open RFQs' : 'Create and manage Request for Quotations'}
+                    </p>
+                  </div>
+
+                  {(role === 'admin' || role === 'officer') && (
+                    <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
+                      <h3 className="text-sm font-black text-slate-800 mb-5">Create New RFQ</h3>
+                      <form onSubmit={handleCreateRfq} className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                        <div className="md:col-span-2">
+                          <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">RFQ Title *</label>
+                          <input required type="text" placeholder="e.g. Q3 Office Hardware Refresh" value={newRfq.title} onChange={e => setNewRfq({...newRfq, title: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-semibold" />
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Category</label>
+                          <input type="text" placeholder="Hardware / Services / etc" value={newRfq.category} onChange={e => setNewRfq({...newRfq, category: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Deadline *</label>
+                          <input required type="text" placeholder="e.g. 30 June 2026" value={newRfq.deadline} onChange={e => setNewRfq({...newRfq, deadline: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Item Name</label>
+                          <input type="text" placeholder="Item description" value={newRfq.item} onChange={e => setNewRfq({...newRfq, item: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Quantity</label>
+                          <input type="number" placeholder="10" value={newRfq.qty} onChange={e => setNewRfq({...newRfq, qty: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                        </div>
+                        <div>
+                          <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Target Unit Cost (₹)</label>
+                          <input type="number" placeholder="5000" value={newRfq.price} onChange={e => setNewRfq({...newRfq, price: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-mono" />
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Specifications</label>
+                          <textarea rows="3" placeholder="Technical requirements, compliance notes..." value={newRfq.description} onChange={e => setNewRfq({...newRfq, description: e.target.value})} className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"></textarea>
+                        </div>
+                        <div className="md:col-span-2">
+                          <button type="submit" className="bg-slate-900 text-white font-bold px-8 py-3 rounded-xl hover:bg-black transition-all shadow-lg">Dispatch RFQ to Vendors →</button>
+                        </div>
+                      </form>
+                    </div>
+                  )}
+
+                  <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden">
+                    <div className="px-6 py-4 border-b border-slate-50 flex justify-between items-center">
+                      <h3 className="text-sm font-black text-slate-800">Active RFQs ({rfqs.length})</h3>
+                    </div>
                     {rfqs.length === 0 ? (
-                      <p className="text-xs text-gray-400 py-6 text-center font-medium">No active purchase orders or workflow cycles open. Start by onboarding your specific data.</p>
+                      <div className="py-16 text-center text-slate-400 font-semibold text-sm">No active RFQs found</div>
                     ) : (
-                      <table className="w-full text-left text-xs">
-                        <thead><tr className="border-b border-gray-100 text-gray-400 font-bold uppercase tracking-wider"><th className="pb-3">RFQ ID</th><th className="pb-3">Scope Project</th><th className="pb-3">Est Total Base</th><th className="pb-3">Status Flag</th></tr></thead>
-                        <tbody className="divide-y divide-gray-50">
-                          {rfqs.map((r, i) => (
-                            <tr key={i} className="hover:bg-gray-50/50">
-                              <td className="py-3.5 font-mono font-bold text-emerald-700">{r.id}</td>
-                              <td className="font-semibold text-gray-800">{r.title}</td>
-                              <td className="font-medium">₹ {(r.qty * r.price).toLocaleString()}</td>
-                              <td><span className="bg-amber-50 text-amber-800 px-2.5 py-1 rounded-full font-bold text-[10px] tracking-wide border border-amber-100">{r.status}</span></td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
+                      <div className="divide-y divide-slate-50">
+                        {rfqs.map((r, i) => (
+                          <div key={i} className="px-6 py-5 flex items-center justify-between hover:bg-slate-50/50 transition-colors group">
+                            <div className="flex items-center gap-4">
+                              <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center font-black text-emerald-700">{r.title.charAt(0)}</div>
+                              <div>
+                                <p className="font-bold text-slate-800 text-sm">{r.title}</p>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full">{r.category || 'General'}</span>
+                                  <span className="text-[10px] text-slate-400 font-semibold">Due: {r.deadline}</span>
+                                </div>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-6">
+                              <div className="text-right">
+                                <p className="text-xs text-slate-400 font-semibold">Est. Volume</p>
+                                <p className="font-black text-slate-800">{r.qty} units</p>
+                              </div>
+                              {role === 'vendor' ? (
+                                <button onClick={() => setCurrentView('bid-submission')} className="bg-emerald-600 text-white text-xs font-bold px-5 py-2.5 rounded-xl hover:bg-emerald-700 transition-all shadow-sm">Submit Bid</button>
+                              ) : (
+                                <button onClick={() => setCurrentView('quotations')} className="border border-slate-200 text-slate-500 text-xs font-bold px-5 py-2.5 rounded-xl hover:bg-slate-50 transition-all">View Bids</button>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     )}
                   </div>
                 </div>
               )}
 
-              {currentView === 'vendors' && (
-                <div className="space-y-6">
-                  <div className="bg-white border rounded-2xl p-6 shadow-sm max-w-xl">
-                    <h3 className="text-sm font-black tracking-tight text-gray-800 mb-4">Onboard Supplier Entry</h3>
-                    <form onSubmit={handleAddVendor} className="grid grid-cols-2 gap-3.5 text-xs">
-                      <div className="col-span-2"><input required type="text" placeholder="Vendor Corporate Name" value={newVendorForm.name} onChange={e => setNewVendorForm({...newVendorForm, name: e.target.value})} className="w-full border p-3 rounded-xl focus:outline-emerald-500" /></div>
-                      <div><input required type="text" placeholder="Category (e.g. IT, Logistics)" value={newVendorForm.category} onChange={e => setNewVendorForm({...newVendorForm, category: e.target.value})} className="w-full border p-3 rounded-xl focus:outline-emerald-500" /></div>
-                      <div><input required type="text" placeholder="GST Number" value={newVendorForm.gst} onChange={e => setNewVendorForm({...newVendorForm, gst: e.target.value})} className="w-full border p-3 rounded-xl focus:outline-emerald-500 font-mono" /></div>
-                      <div><input type="text" placeholder="Contact Details" value={newVendorForm.contact} onChange={e => setNewVendorForm({...newVendorForm, contact: e.target.value})} className="w-full border p-3 rounded-xl focus:outline-emerald-500" /></div>
-                      <div>
-                        <select value={newVendorForm.status} onChange={e => setNewVendorForm({...newVendorForm, status: e.target.value})} className="w-full border p-3 rounded-xl bg-white focus:outline-none">
-                          <option value="Active">Active</option>
-                          <option value="Pending">Pending</option>
-                          <option value="Blocked">Blocked</option>
-                        </select>
-                      </div>
-                      <div className="col-span-2 pt-2"><button type="submit" className="bg-emerald-600 text-white font-extrabold px-5 py-3 rounded-xl shadow-sm tracking-wide">Register Vendor Profile</button></div>
-                    </form>
+              {/* ─── BID SUBMISSION (Vendor) ─── */}
+              {currentView === 'bid-submission' && (
+                <div className="max-w-2xl space-y-6">
+                  <div className="flex items-center gap-4">
+                    <button onClick={() => setCurrentView('rfqs')} className="text-slate-400 hover:text-slate-700 transition-colors text-sm font-bold">← Back</button>
+                    <div>
+                      <h1 className="text-2xl font-black text-slate-900">Submit Commercial Bid</h1>
+                      <p className="text-xs text-slate-400 font-semibold mt-1">For: {rfqs[0]?.title || 'Selected RFQ'}</p>
+                    </div>
                   </div>
+                  <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm space-y-5 text-xs">
+                    <div>
+                      <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Unit Price Offer (₹) *</label>
+                      <input 
+                        required 
+                        type="number" 
+                        placeholder="5200" 
+                        value={bidForm.amount}
+                        onChange={e => setBidForm({...bidForm, amount: e.target.value})}
+                        className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 font-black text-lg" 
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Lead Time (Days)</label>
+                        <input 
+                          type="number" 
+                          placeholder="7" 
+                          value={bidForm.leadTime}
+                          onChange={e => setBidForm({...bidForm, leadTime: e.target.value})}
+                          className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500" 
+                        />
+                      </div>
+                      <div>
+                        <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Warranty (Months)</label>
+                        <input type="number" placeholder="12" className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-500 mb-1.5 uppercase tracking-wider text-[10px]">Technical Notes / Remarks</label>
+                      <textarea rows="4" placeholder="Compliance details, delivery terms, etc..." className="w-full border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none"></textarea>
+                    </div>
+                    <div className="flex justify-between items-center pt-4 border-t border-slate-50">
+                      <button onClick={() => setCurrentView('rfqs')} className="text-slate-400 font-bold text-xs hover:text-slate-700">Cancel</button>
+                      <button 
+                        onClick={() => handleBidSubmit(rfqs[0].id, bidForm.amount, bidForm.leadTime)} 
+                        className="bg-emerald-600 text-white font-bold px-8 py-3 rounded-xl hover:bg-emerald-700 transition-all shadow-sm"
+                      >
+                        Transmit Bid →
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
 
-                  <div className="space-y-3">
-                    <h1 className="text-xl font-bold tracking-tight">Vendors Ledger Index</h1>
-                    <div className="bg-white border rounded-2xl overflow-hidden shadow-sm">
-                      <table className="w-full text-left text-xs">
-                        <thead className="bg-slate-50 border-b border-slate-100 font-bold uppercase tracking-wider text-gray-400"><tr><th className="p-4">Vendor Name</th><th className="p-4">Category</th><th className="p-4">GST no.</th><th className="p-4">Status</th></tr></thead>
-                        <tbody className="divide-y divide-slate-50">
-                          {vendors.length === 0 ? (
-                            <tr><td colSpan="4" className="p-5 text-center text-gray-400 font-medium">No supplier profiles found inside storage buffers. Populate utilizing configuration frame wizard block.</td></tr>
-                          ) : (
-                            vendors.map(v => (
-                              <tr key={v.id} className="hover:bg-slate-50/40">
-                                <td className="p-4 font-bold text-slate-800">{v.name}</td>
-                                <td className="p-4 text-gray-600">{v.category}</td>
-                                <td className="p-4 font-mono text-gray-500">{v.gst}</td>
-                                <td className="p-4"><span className={`px-2.5 py-0.5 rounded-full font-bold text-[10px] uppercase border ${v.status === 'Active' ? 'bg-green-50 text-green-700 border-green-100' : 'bg-red-50 text-red-700 border-red-100'}`}>{v.status}</span></td>
-                              </tr>
-                            ))
-                          )}
+              {/* ─── QUOTATIONS / BID EVALUATION ─── */}
+              {currentView === 'quotations' && (
+                <div className="space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-black text-slate-900">Bid Evaluation Matrix</h1>
+                    <p className="text-xs text-slate-400 font-semibold mt-1">Side-by-side comparison of vendor submissions</p>
+                  </div>
+                  {quotations.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-slate-100 p-20 text-center shadow-sm">
+                      <p className="text-sm text-slate-400 font-semibold">No bids received yet. Dispatch an RFQ first.</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                      {quotations.map((q, i) => {
+                        const isL1 = q.grandTotal === Math.min(...quotations.map(b => b.grandTotal));
+                        return (
+                          <div key={i} className={`relative bg-white rounded-2xl border-2 p-6 hover:shadow-xl transition-all ${isL1 ? 'border-emerald-500 shadow-lg' : 'border-slate-100'}`}>
+                            {isL1 && <div className="absolute -top-3 left-5 bg-emerald-600 text-white text-[10px] font-black px-3 py-1 rounded-full">L1 — LOWEST BID</div>}
+                            <h3 className="font-black text-slate-900 text-base mt-2">{q.vendor}</h3>
+                            <p className="text-2xl font-black text-emerald-700 mt-4">₹{q.grandTotal.toLocaleString()}</p>
+                            <div className="mt-4 space-y-2 text-xs">
+                              <div className="flex justify-between">
+                                <span className="text-slate-400 font-semibold">Delivery</span>
+                                <span className="font-bold text-slate-700">{q.delivery} days</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-400 font-semibold">Status</span>
+                                <span className={`font-bold ${q.isLowest ? 'text-emerald-600' : 'text-slate-500'}`}>{q.rating}</span>
+                              </div>
+                            </div>
+                            <button 
+                              onClick={() => rfqs[0] && handleStartApprovalWorkflow(rfqs[0].id, q.id)} 
+                              className={`w-full mt-5 py-2.5 rounded-xl text-xs font-bold transition-all ${isL1 ? 'bg-emerald-600 text-white hover:bg-emerald-700' : 'border border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                            >
+                              {isL1 ? 'Select & Send for Approval' : 'Compare'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ─── APPROVALS (Admin + Manager) ─── */}
+              {currentView === 'approvals' && (
+                <div className="space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-black text-slate-900">Approval Workflow</h1>
+                    <p className="text-xs text-slate-400 font-semibold mt-1">Review, authorize or reject pending procurement submissions</p>
+                  </div>
+                  {rfqs.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-slate-100 p-20 text-center shadow-sm">
+                      <p className="text-sm text-slate-400 font-semibold">No pending approvals in the queue</p>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                      <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm space-y-5">
+                        <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 border-b border-slate-50 pb-3">Submission Details</h3>
+                        <div className="space-y-4">
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Project Title</p>
+                            <p className="font-black text-slate-900">{rfqs[0].title}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Selected Vendor</p>
+                            <p className="font-black text-emerald-700">{quotations[0]?.vendor || 'Pending Selection'}</p>
+                          </div>
+                          <div>
+                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Contract Value</p>
+                            <p className="text-2xl font-black text-slate-900">₹{(quotations[0]?.grandTotal || (rfqs[0].qty * rfqs[0].price)).toLocaleString()}</p>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Authorization Remarks *</label>
+                          <textarea rows="3" placeholder="Enter approval notes or rejection grounds..." className="w-full border border-slate-200 rounded-xl p-3 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none font-medium"></textarea>
+                        </div>
+                      </div>
+                      <div className="space-y-4">
+                        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-5">
+                          <p className="text-[10px] font-black text-emerald-800 uppercase tracking-wider mb-2">Compliance Status</p>
+                          <p className="text-xs font-bold text-emerald-700 leading-relaxed">All budget limits verified. Vendor onboarding complete. GST & documentation compliance confirmed.</p>
+                        </div>
+                        <button onClick={() => void handleResolveApproval('approved')} className="w-full bg-emerald-600 text-white font-black py-4 rounded-xl text-xs tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-100">
+                          ✓ AUTHORIZE & SIGN OFF
+                        </button>
+                        <button onClick={() => void handleResolveApproval('rejected')} className="w-full border-2 border-slate-200 text-slate-500 font-black py-4 rounded-xl text-xs tracking-widest hover:bg-slate-50 transition-all">
+                          ✕ REJECT SUBMISSION
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ─── PURCHASE ORDERS / INVOICES ─── */}
+              {currentView === 'invoices' && (
+                <div className="space-y-6">
+                  <div className="flex justify-between items-center print:hidden">
+                    <div>
+                      <h1 className="text-2xl font-black text-slate-900">Purchase Orders</h1>
+                      <p className="text-xs text-slate-400 font-semibold mt-1">Official procurement documents and invoices</p>
+                    </div>
+                    <button onClick={() => window.print()} className="bg-slate-900 text-white font-bold px-5 py-2.5 rounded-xl text-xs hover:bg-black transition-all">Print / Export PDF</button>
+                  </div>
+                  {rfqs.length === 0 ? (
+                    <div className="bg-white rounded-2xl border border-slate-100 p-20 text-center shadow-sm">
+                      <p className="text-sm text-slate-400 font-semibold">No purchase orders generated yet</p>
+                      <p className="text-xs text-slate-300 mt-1">Complete the approval workflow to generate a PO</p>
+                    </div>
+                  ) : (
+                    <div className="bg-white border border-slate-200 rounded-2xl p-10 max-w-3xl mx-auto shadow-xl print:shadow-none space-y-8 text-xs text-slate-800">
+                      <div className="flex justify-between items-start border-b-4 border-emerald-600 pb-6">
+                        <div>
+                          <h2 className="text-3xl font-black text-slate-900 tracking-tighter">VENDORBRIDGE<span className="text-emerald-600">.</span></h2>
+                          <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mt-1">Enterprise Procurement Division</p>
+                        </div>
+                        <div className="text-right">
+                          <span className="bg-emerald-600 text-white text-[10px] font-black px-3 py-1 rounded-full">PURCHASE ORDER</span>
+                          <p className="font-mono font-black text-slate-900 mt-2">#{`PO-${Date.now().toString().slice(-6)}`}</p>
+                          <p className="text-[10px] text-slate-400 mt-1">{new Date().toLocaleDateString('en-IN', {day:'2-digit',month:'long',year:'numeric'})}</p>
+                        </div>
+                      </div>
+                      <div className="grid grid-cols-2 gap-8">
+                        <div>
+                          <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Buyer</p>
+                          <p className="font-black text-slate-900">VendorBridge Corp HQ</p>
+                          <p className="text-slate-500 mt-1 leading-relaxed">Enterprise Tower, 12th Floor<br/>Business District, Metro City</p>
+                          <p className="text-emerald-700 font-mono font-black text-[10px] mt-2">GSTIN: 22AAAAA0000A1Z5</p>
+                        </div>
+                        <div>
+                          <p className="text-[9px] font-black text-slate-300 uppercase tracking-widest mb-2">Vendor</p>
+                          <p className="font-black text-slate-900">{quotations[0]?.vendor || rfqs[0].title}</p>
+                          <p className="text-slate-500 mt-1 leading-relaxed">As per registered profile</p>
+                        </div>
+                      </div>
+                      <table className="w-full">
+                        <thead className="bg-slate-900 text-white text-[9px] font-black uppercase tracking-widest">
+                          <tr>
+                            <th className="text-left px-4 py-2.5">Item</th>
+                            <th className="text-center px-4 py-2.5">Qty</th>
+                            <th className="text-right px-4 py-2.5">Unit Price</th>
+                            <th className="text-right px-4 py-2.5">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr className="border-b border-slate-100">
+                            <td className="px-4 py-3 font-bold">{rfqs[0].item || rfqs[0].title}</td>
+                            <td className="px-4 py-3 text-center">{rfqs[0].qty}</td>
+                            <td className="px-4 py-3 text-right font-mono">₹{rfqs[0].price?.toLocaleString()}</td>
+                            <td className="px-4 py-3 text-right font-black font-mono">₹{(rfqs[0].qty * rfqs[0].price).toLocaleString()}</td>
+                          </tr>
                         </tbody>
+                        <tfoot className="bg-slate-50">
+                          <tr><td colSpan="3" className="px-4 py-2 text-right font-bold text-slate-500">Subtotal</td><td className="px-4 py-2 text-right font-black font-mono">₹{activeSubtotal.toLocaleString()}</td></tr>
+                          <tr><td colSpan="3" className="px-4 py-2 text-right text-slate-500">CGST (9%)</td><td className="px-4 py-2 text-right font-mono">₹{calculatedCgst.toLocaleString()}</td></tr>
+                          <tr><td colSpan="3" className="px-4 py-2 text-right text-slate-500">SGST (9%)</td><td className="px-4 py-2 text-right font-mono">₹{calculatedSgst.toLocaleString()}</td></tr>
+                          <tr className="border-t-2 border-slate-900"><td colSpan="3" className="px-4 py-3 text-right font-black text-slate-900 text-sm">Grand Total</td><td className="px-4 py-3 text-right font-black font-mono text-emerald-700 text-sm">₹{completeGrandTotal.toLocaleString()}</td></tr>
+                        </tfoot>
                       </table>
                     </div>
-                  </div>
-                </div>
-              )}
-
-              {currentView === 'rfqs' && (
-                <div className="max-w-2xl bg-white border rounded-2xl p-6 shadow-sm space-y-4">
-                  <h1 className="text-xl font-black text-gray-900 tracking-tight">Create RFQ's Node</h1>
-                  <form onSubmit={handleCreateRfq} className="space-y-4 text-xs">
-                    <div><label className="block font-bold text-gray-500 mb-1">RFQ Title Scope*</label><input required type="text" placeholder="e.g., Office Furniture Procurement" value={newRfq.title} onChange={e => setNewRfq({...newRfq, title: e.target.value})} className="w-full border rounded-xl p-3 focus:outline-emerald-500 font-medium" /></div>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div><label className="block font-bold text-gray-500 mb-1">Category Core</label><input type="text" placeholder="Category" value={newRfq.category} onChange={e => setNewRfq({...newRfq, category: e.target.value})} className="w-full border rounded-xl p-3 focus:outline-emerald-500" /></div>
-                      <div><label className="block font-bold text-gray-500 mb-1">Target Response Deadline*</label><input required type="text" placeholder="e.g. 15 June 2026" value={newRfq.deadline} onChange={e => setNewRfq({...newRfq, deadline: e.target.value})} className="w-full border rounded-xl p-3 focus:outline-emerald-500 font-medium" /></div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-3">
-                      <div><label className="block font-bold text-gray-500 mb-1">Item Label</label><input type="text" placeholder="Item Name" value={newRfq.item} onChange={e => setNewRfq({...newRfq, item: e.target.value})} className="w-full border rounded-xl p-3 focus:outline-emerald-500" /></div>
-                      <div><label className="block font-bold text-gray-500 mb-1">Quantity</label><input type="number" placeholder="25" value={newRfq.qty} onChange={e => setNewRfq({...newRfq, qty: e.target.value})} className="w-full border rounded-xl p-3 focus:outline-emerald-500" /></div>
-                      <div><label className="block font-bold text-gray-500 mb-1">Unit Target Cost (₹)</label><input type="number" placeholder="3500" value={newRfq.price} onChange={e => setNewRfq({...newRfq, price: e.target.value})} className="w-full border rounded-xl p-3 focus:outline-emerald-500 font-medium" /></div>
-                    </div>
-                    <div><label className="block font-bold text-gray-500 mb-1">Technical Specifications Details</label><textarea rows="3" placeholder="Specify compliance frameworks..." value={newRfq.description} onChange={e => setNewRfq({...newRfq, description: e.target.value})} className="w-full border rounded-xl p-3 focus:outline-emerald-500 font-medium"></textarea></div>
-                    <button type="submit" className="bg-emerald-600 text-white font-extrabold px-5 py-3 rounded-xl shadow-md tracking-wide">Save & Send to Vendors</button>
-                  </form>
-                </div>
-              )}
-
-              {currentView === 'quotations' && (
-                <div className="space-y-4">
-                  <h1 className="text-xl font-black text-gray-900 tracking-tight">Quotations Comparison Panel</h1>
-                  {quotations.length === 0 ? (
-                    <p className="text-xs text-gray-400 p-5 bg-white border rounded-2xl text-center shadow-sm font-medium">No incoming bids mapped inside transaction buffers. Build an RFQ configuration block matrix first.</p>
-                  ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                      {quotations.map((q, idx) => (
-                        <div key={idx} className="border-2 border-emerald-500 bg-emerald-50/10 rounded-2xl p-6 shadow-md flex flex-col justify-between">
-                          <div>
-                            <span className="bg-emerald-600 text-white font-bold text-[9px] uppercase px-2.5 py-1 rounded-md tracking-wider shadow-sm">★★ Automated Lowest Valuation Candidate ★★</span>
-                            <h3 className="font-extrabold text-base mt-3 mb-4 text-slate-800">Dynamic Bidder Evaluation Frame</h3>
-                            <div className="text-xs space-y-2 font-semibold">
-                              <p className="text-gray-400 flex justify-between">Calculated Grand Base Total: <span className="font-bold text-gray-900 font-mono">₹ {q.grandTotal.toLocaleString()}</span></p>
-                              <p className="text-gray-400 flex justify-between">Fulfillment Delivery: <span className="text-gray-800 font-medium">{q.delivery} business days</span></p>
-                              <p className="text-gray-500 flex justify-between">System Performance Index: <span className="text-emerald-700 font-black">{q.rating}</span></p>
-                            </div>
-                          </div>
-                          <button onClick={() => {
-                              void handleStartApprovalWorkflow();
-                          }} className="w-full mt-6 bg-emerald-600 text-white py-3 rounded-xl text-xs font-black shadow-md tracking-wider">Select & Initiate Approval Workflow</button>
-                        </div>
-                      ))}
-                    </div>
                   )}
                 </div>
               )}
 
-              {currentView === 'approvals' && (
-                <div className="bg-white border rounded-2xl p-6 shadow-sm max-w-3xl space-y-6">
-                  <h1 className="text-xl font-black text-gray-900 tracking-tight">Approval Verification Sign-off</h1>
-                  <div className="flex justify-between border-b border-gray-100 pb-4 text-[11px] font-bold tracking-tight text-gray-400">
-                    <span className="text-emerald-600 font-black">1. Node Dispatched</span><span>➔</span><span className="text-emerald-600 font-black">2. Verification Audit</span><span>➔</span><span className="text-emerald-800 font-black underline decoration-2 underline-offset-4">3. Exec Approval</span><span>➔</span><span>4. Print PO Document</span>
-                  </div>
-                  {rfqs.length === 0 ? (
-                    <p className="text-xs text-center py-4 font-semibold text-gray-400">No validation target active inside cache frames.</p>
-                  ) : (
-                    <div className="space-y-4">
-                      <div className="p-4 bg-gray-50 rounded-xl border text-xs font-semibold space-y-1.5">
-                        <p className="text-gray-400">Target Object Scope: <span className="text-gray-900 font-bold">{rfqs[0].title}</span></p>
-                        <p className="text-gray-400">Operational Base Cost Value: <span className="text-emerald-800 font-extrabold">₹ {(rfqs[0].qty * rfqs[0].price).toLocaleString()}</span></p>
-                      </div>
-                      <div className="flex space-x-3 pt-2">
-                        <button onClick={() => {
-                            void handleResolveApproval('approved');
-                        }} className="bg-emerald-600 text-white px-6 py-2.5 rounded-xl text-xs font-black shadow-md tracking-wide">Sign-off & Approve</button>
-                        <button onClick={() => {
-                            void handleResolveApproval('rejected');
-                        }} className="border border-slate-200 text-gray-500 px-5 py-2.5 rounded-xl text-xs font-bold hover:bg-slate-50">Reject Loop</button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {currentView === 'invoices' && (
-                <div className="space-y-5">
-                  <div className="flex justify-between items-center print:hidden">
-                    <h1 className="text-xl font-black text-gray-900 tracking-tight">Purchase Order & Invoice Vault</h1>
-                    <button onClick={() => window.print()} className="bg-emerald-700 hover:bg-emerald-800 text-white font-extrabold px-5 py-2 text-xs rounded-xl shadow-md">Print / Download PDF</button>
-                  </div>
-                  {rfqs.length === 0 ? (
-                    <p className="text-xs text-gray-400 text-center py-10 bg-white border rounded-2xl shadow-sm">No immutable invoice files found inside system cache records.</p>
-                  ) : (
-                    <div className="bg-white border border-gray-300 p-10 max-w-2xl mx-auto shadow-lg space-y-6 text-xs text-gray-800 print:shadow-none print:border-none print:my-0">
-                      <div className="flex justify-between border-b-2 border-gray-100 pb-4"><h2 className="text-base font-extrabold text-emerald-800 tracking-tight">VENDORBRIDGE ENTERPRISE</h2><p className="font-mono font-bold text-gray-900 text-sm">PO-2026-0068</p></div>
-                      <div className="grid grid-cols-2 gap-4 text-[11px] border-b border-gray-100 pb-4">
-                        <div><p className="font-bold text-gray-400 uppercase tracking-wider mb-1">Billing Entity Matrix</p><p className="font-extrabold text-gray-900">Internal Accounts Department</p><p className="text-gray-400 font-mono text-[10px] mt-0.5">GSTIN: 253834384AFB</p></div>
-                        <div><p className="font-bold text-gray-400 uppercase tracking-wider mb-1">Supplier Profile Partner</p><p className="font-extrabold text-gray-900">Dynamic Registered Bidder Node</p><p className="text-gray-400 font-mono text-[10px] mt-0.5">GSTIN: 343434DB4523</p></div>
-                      </div>
-                      <div className="space-y-2">
-                        <p className="font-bold text-gray-400 uppercase tracking-wider text-[10px]">Itemized Fulfillment Line Items</p>
-                        <div className="flex justify-between items-center bg-slate-50 p-3 rounded-xl border border-slate-100 font-semibold text-slate-900">
-                          <span>{rfqs[0].item || 'Unspecified Asset'}</span>
-                          <span className="font-mono text-slate-500 text-[11px]">Qty: {rfqs[0].qty} @ ₹ {rfqs[0].price.toLocaleString()}</span>
-                        </div>
-                      </div>
-                      <div className="pt-4 text-right space-y-1.5 text-xs border-t border-dashed border-gray-200">
-                        <p className="text-gray-400">Calculated Subtotal base: <span className="font-mono text-gray-900 font-semibold ml-2">₹ {activeSubtotal.toLocaleString()}</span></p>
-                        <p className="text-gray-400">Central CGST (9%): <span className="font-mono text-gray-900 ml-2">₹ {calculatedCgst.toLocaleString()}</span></p>
-                        <p className="text-gray-400">State SGST (9%): <span className="font-mono text-gray-900 ml-2">₹ {calculatedSgst.toLocaleString()}</span></p>
-                        <div className="border-t border-slate-200 pt-2 font-black text-base text-emerald-800">Grand Total Billing Sum: ₹ {completeGrandTotal.toLocaleString()}</div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
+              {/* ─── REPORTS ─── */}
               {currentView === 'reports' && (
-                <div className="bg-white border rounded-2xl p-6 shadow-sm space-y-5">
-                  <h1 className="text-xl font-bold">Reports & High-level Analytics</h1>
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs font-semibold">
-                    <div className="p-4 bg-gray-50 border rounded-xl shadow-sm"><p className="text-gray-400 uppercase tracking-wider text-[10px]">Total Ecosystem Spend</p><p className="text-2xl font-black text-emerald-800 mt-1 font-mono">₹ {completeGrandTotal.toLocaleString()}</p></div>
-                    <div className="p-4 bg-gray-50 border rounded-xl shadow-sm"><p className="text-gray-400 uppercase tracking-wider text-[10px]">Onboarded Active Vendors</p><p className="text-2xl font-black text-slate-800 mt-1">{vendors.length} Registers</p></div>
+                <div className="space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-black text-slate-900">Analytics Hub</h1>
+                    <p className="text-xs text-slate-400 font-semibold mt-1">Strategic procurement insights</p>
                   </div>
-                </div>
-              )}
-
-              {currentView === 'activity' && (
-                <div className="bg-white border rounded-2xl p-6 shadow-sm max-w-xl space-y-4">
-                  <h1 className="text-xl font-black text-gray-900 tracking-tight">Immutable System Activity Audit Trail</h1>
-                  <div className="space-y-4 text-xs border-l-2 pl-5 border-emerald-600 relative">
-                    {logs.map((log, i) => (
-                      <div key={i} className="relative group">
-                        <div className="absolute -left-6.25 top-0.5 bg-emerald-700 w-2 h-2 rounded-full border border-white"></div>
-                        <p className="font-bold text-gray-800 group-hover:text-emerald-900 transition-colors">{log.text}</p>
-                        <p className="text-[10px] text-gray-400 mt-0.5 font-mono">{log.time} • Mapped Class: {log.type}</p>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+                    {[
+                      { title: 'Cost Savings', value: '12.4%', sub: 'vs. previous quarter', accent: 'emerald' },
+                      { title: 'Active Vendors', value: vendors.length, sub: 'registered partners', accent: 'blue' },
+                      { title: 'Avg. Cycle Time', value: '1.2 days', sub: 'approval turnaround', accent: 'amber' },
+                    ].map((m, i) => (
+                      <div key={i} className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">{m.title}</p>
+                        <p className="text-3xl font-black text-slate-900 mt-2">{m.value}</p>
+                        <p className="text-xs text-slate-400 font-semibold mt-1">{m.sub}</p>
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
-
-              {currentView === 'vendor-request' && (
-                <div className="max-w-xl bg-white border rounded-2xl p-6 shadow-sm space-y-4">
-                  <h1 className="text-xl font-black text-gray-900 tracking-tight">Vendor Request / Clarification Console Center</h1>
-                  <p className="text-xs text-gray-400 font-medium">Submit an operational clarification or query directly to the active desk officer.</p>
-                  <form onSubmit={handleVendorRequestSubmit} className="space-y-3.5 text-xs">
-                    <textarea required rows="4" value={vendorQuery} onChange={e => setVendorQuery(e.target.value)} placeholder="Type your formal clarification or assistance request here..." className="w-full border rounded-xl p-3 focus:outline-emerald-500 font-medium leading-normal shadow-inner"></textarea>
-                    <button type="submit" className="bg-emerald-600 text-white font-extrabold px-5 py-2.5 rounded-xl shadow-md tracking-wide">Put Request to Officer</button>
-                  </form>
-
-                  {vendorRequests.length > 0 && (
-                    <div className="border-t border-slate-100 pt-4 space-y-2.5">
-                      <h4 className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Dispatched Queries Monitoring</h4>
-                      {vendorRequests.map((r, idx) => (
-                        <div key={idx} className="p-3 bg-slate-50 border rounded-xl text-xs font-semibold shadow-sm">
-                          <p className="text-gray-700 leading-normal font-medium">{r.text}</p>
-                          <p className="text-[9px] text-amber-700 font-black mt-2 bg-amber-50 border border-amber-100 inline-block px-2 py-0.5 rounded-md">Submitted by {r.vendor} ➔ Forwarded to Desk Officer Queue</p>
+                  <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
+                    <h3 className="text-xs font-black uppercase tracking-widest text-slate-400 mb-5">Spend by Category</h3>
+                    <div className="space-y-5">
+                      {[
+                        { name: 'Operations', spend: '₹4,40,000', pct: 75 },
+                        { name: 'Engineering', spend: '₹2,10,000', pct: 35 },
+                        { name: 'Human Resources', spend: '₹89,000', pct: 15 },
+                      ].map((row, i) => (
+                        <div key={i} className="flex items-center gap-5">
+                          <span className="w-32 text-[10px] font-black uppercase text-slate-600">{row.name}</span>
+                          <div className="flex-1 h-2 bg-slate-100 rounded-full overflow-hidden">
+                            <div className="h-full bg-emerald-500 rounded-full" style={{width: `${row.pct}%`}}></div>
+                          </div>
+                          <span className="w-20 text-right text-xs font-mono font-black text-slate-800">{row.spend}</span>
                         </div>
                       ))}
                     </div>
-                  )}
+                  </div>
+                </div>
+              )}
+
+              {/* ─── AUDIT TRAIL ─── */}
+              {currentView === 'activity' && (
+                <div className="max-w-2xl space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-black text-slate-900">Audit Trail</h1>
+                    <p className="text-xs text-slate-400 font-semibold mt-1">Immutable chronological system log</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
+                    <div className="space-y-6 relative before:absolute before:left-[7px] before:top-2 before:bottom-2 before:w-0.5 before:bg-slate-100">
+                      {logs.map((log, i) => (
+                        <div key={i} className="relative pl-8">
+                          <div className="absolute left-0 top-1 w-4 h-4 bg-white border-2 border-emerald-400 rounded-full"></div>
+                          <p className="text-sm font-bold text-slate-800">{log.text}</p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className="text-[10px] text-slate-300 font-semibold">{log.time}</span>
+                            <span className="text-[9px] font-black text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded">{log.type}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* ─── VENDOR REQUESTS (Vendor only) ─── */}
+              {currentView === 'vendor-request' && (
+                <div className="max-w-xl space-y-6">
+                  <div>
+                    <h1 className="text-2xl font-black text-slate-900">Clarification Requests</h1>
+                    <p className="text-xs text-slate-400 font-semibold mt-1">Submit queries directly to the procurement officer</p>
+                  </div>
+                  <div className="bg-white rounded-2xl border border-slate-100 p-6 shadow-sm">
+                    <form onSubmit={handleVendorRequestSubmit} className="space-y-4">
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-widest text-slate-400 mb-2">Your Query *</label>
+                        <textarea required rows="4" value={vendorQuery} onChange={e => setVendorQuery(e.target.value)} placeholder="Describe your clarification or concern..." className="w-full border border-slate-200 rounded-xl p-3 text-xs focus:outline-none focus:ring-2 focus:ring-emerald-500 resize-none font-medium"></textarea>
+                      </div>
+                      <button type="submit" className="bg-emerald-600 text-white font-bold px-6 py-3 rounded-xl text-xs hover:bg-emerald-700 transition-all shadow-sm">Send to Officer →</button>
+                    </form>
+                    {vendorRequests.length > 0 && (
+                      <div className="border-t border-slate-50 pt-5 mt-5 space-y-3">
+                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Sent Queries</p>
+                        {vendorRequests.map((r, i) => (
+                          <div key={i} className="p-3 bg-slate-50 rounded-xl text-xs">
+                            <p className="font-semibold text-slate-700">{r.text}</p>
+                            <p className="text-[10px] text-amber-600 font-bold mt-1 bg-amber-50 inline-block px-2 py-0.5 rounded mt-2">Forwarded to officer queue</p>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
             </main>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

@@ -52,7 +52,7 @@ const userSchema = new Schema(
     passwordHash: { type: String, required: true },
     role: {
       type: String,
-      enum: ['admin', 'procurement_officer', 'vendor'],
+      enum: ['admin', 'procurement_officer', 'vendor', 'manager'],
       required: true
     },
     isActive: { type: Boolean, default: true },
