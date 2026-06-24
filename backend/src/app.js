@@ -31,6 +31,11 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'vendorbridge-backend' });
 });
 
+app.post('/test-body', (req, res) => {
+  console.log('TEST BODY', req.body);
+  res.json(req.body);
+});
+
 app.use('/auth', authRoutes);
 app.use('/admin', adminRoutes);
 app.use('/procurement', procurementRoutes);

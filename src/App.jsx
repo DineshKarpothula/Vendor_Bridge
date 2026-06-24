@@ -28,7 +28,10 @@ function toUiRole(role) {
 }
 
 async function apiRequest(path, { method = 'GET', token, body } = {}) {
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
+  const url = `${getApiBaseUrl()}${path}`;
+  console.log('API REQUEST', { url, method, body });
+
+  const response = await fetch(url, {
     method,
     headers: {
       'Content-Type': 'application/json',
