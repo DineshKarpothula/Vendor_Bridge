@@ -1,7 +1,19 @@
 import { useEffect, useState } from 'react';
 import LandingPage from './LandingPage';
 
-const API_URL = import.meta.env.VITE_API_URL || 'https://vendor-bridge-f4qr.onrender.com';
+const API_BASE_URL = import.meta.env.VITE_API_URL ?? '';
+
+function getApiBaseUrl() {
+  if (API_BASE_URL) {
+    return API_BASE_URL;
+  }
+
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return window.location.origin;
+  }
+
+  return '';
+}
 
 function toBackendRole(role) {
   if (role === 'officer') return 'procurement_officer';
@@ -16,7 +28,7 @@ function toUiRole(role) {
 }
 
 async function apiRequest(path, { method = 'GET', token, body } = {}) {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  const response = await fetch(`${getApiBaseUrl()}${path}`, {
     method,
     headers: {
       'Content-Type': 'application/json',
