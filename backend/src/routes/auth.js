@@ -51,7 +51,8 @@ router.post('/bootstrap-admin', async (req, res, next) => {
 
 router.post('/login', async (req, res, next) => {
   try {
-    const { email, password } = req.body;
+    console.log('AUTH LOGIN RAW BODY', req.body);
+    const { email, password } = req.body || {};
 
     if (!email || !password) {
       return res.status(400).json({ message: 'email and password are required' });
