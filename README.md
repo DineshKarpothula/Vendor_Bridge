@@ -2,7 +2,7 @@
 
 **VendorBridge** is an institutional-grade procurement management platform designed to streamline the entire supply chain lifecycle—from vendor onboarding and RFQ (Request for Quotation) dispatch to bid evaluation and automated Purchase Order generation.
 
-Built with a high-density, professional aesthetic, VendorBridge ensures transparency, compliance, and efficiency for enterprises managing complex procurement cycles.
+Built with a high-density, professional aesthetic, VendorBridge ensures transparency, compliance, and efficiency for enterprises managing complex procurement cycles..
 
 ---
 
@@ -94,3 +94,4 @@ Use the following credentials to explore the system. All accounts share the same
 
 ## 📜 License
 © 2026 VendorBridge Enterprise Core. All Rights Reserved. Built for excellence in procurement.
+
